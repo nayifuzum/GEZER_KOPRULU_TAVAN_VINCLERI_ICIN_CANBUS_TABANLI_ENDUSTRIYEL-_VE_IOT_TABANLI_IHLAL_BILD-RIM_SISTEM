@@ -1,0 +1,516 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Vinç İzleme Sistemi — CANBus Simülasyonu</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Oswald:wght@500;600;700&family=JetBrains+Mono:wght@400;500;700&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/emailjs-com/3.2.0/email.min.js"></script>
+<style>
+  :root{
+    --bg:#0E1114;
+    --panel:#171C21;
+    --panel-2:#12161A;
+    --border:#262E35;
+    --amber:#FFB020;
+    --amber-dim:#8A6420;
+    --red:#FF4444;
+    --green:#3ECF8E;
+    --text:#E7E4DC;
+    --text-dim:#828B93;
+    --text-faint:#4E565D;
+  }
+  *{box-sizing:border-box;}
+  body{
+    margin:0;
+    background:
+      radial-gradient(ellipse at top, #161B20 0%, var(--bg) 55%),
+      repeating-linear-gradient(0deg, rgba(255,255,255,0.012) 0px, rgba(255,255,255,0.012) 1px, transparent 1px, transparent 3px);
+    color:var(--text);
+    font-family:'Inter', sans-serif;
+    padding:28px 16px 60px;
+  }
+  .wrap{max-width:920px; margin:0 auto;}
+
+  /* ---------- HEADER ---------- */
+  header{
+    display:flex; align-items:center; justify-content:space-between;
+    padding-bottom:18px; margin-bottom:22px;
+    border-bottom:1px solid var(--border);
+  }
+  .brand{display:flex; align-items:center; gap:12px;}
+  .brand-mark{
+    width:34px; height:34px; border-radius:6px;
+    background:linear-gradient(145deg, var(--amber), #C9820E);
+    display:flex; align-items:center; justify-content:center;
+    font-family:'Oswald'; font-weight:700; color:#1A1300; font-size:15px;
+    box-shadow:0 0 14px rgba(255,176,32,0.35);
+  }
+  .brand h1{
+    font-family:'Oswald'; font-weight:600; font-size:19px; letter-spacing:0.5px;
+    margin:0; text-transform:uppercase;
+  }
+  .brand p{margin:2px 0 0; font-size:12px; color:var(--text-dim);}
+  .rec{
+    display:flex; align-items:center; gap:7px;
+    font-family:'JetBrains Mono'; font-size:12px; color:var(--text-dim);
+    border:1px solid var(--border); padding:6px 12px; border-radius:20px;
+  }
+  .rec-dot{width:8px; height:8px; border-radius:50%; background:var(--text-faint); transition:.2s;}
+  .rec.live .rec-dot{background:var(--red); box-shadow:0 0 8px var(--red); animation:pulse 1.2s infinite;}
+  @keyframes pulse{0%,100%{opacity:1;}50%{opacity:.35;}}
+
+  /* ---------- GAUGES ---------- */
+  .gauges{display:grid; grid-template-columns:1fr 1fr 1fr; gap:14px; margin-bottom:16px;}
+  @media(max-width:720px){.gauges{grid-template-columns:1fr;}}
+  .gauge{
+    background:var(--panel); border:1px solid var(--border); border-radius:10px;
+    padding:16px 18px; position:relative; overflow:hidden;
+  }
+  .gauge::before{
+    content:''; position:absolute; top:0; left:0; right:0; height:2px;
+    background:linear-gradient(90deg, transparent, var(--amber-dim), transparent);
+  }
+  .gauge-label{
+    font-family:'Oswald'; font-size:11px; letter-spacing:1.5px; text-transform:uppercase;
+    color:var(--text-dim); margin-bottom:10px; display:flex; justify-content:space-between;
+  }
+  .gauge-label span.id{color:var(--text-faint); font-family:'JetBrains Mono'; letter-spacing:0;}
+  .led{
+    font-family:'JetBrains Mono'; font-weight:700; font-size:34px;
+    background:#08090B; border:1px solid #1C2228; border-radius:6px;
+    padding:10px 12px; text-align:right; letter-spacing:1px;
+    color:var(--amber); text-shadow:0 0 6px rgba(255,176,32,.75), 0 0 20px rgba(255,176,32,.25);
+    transition:color .2s, text-shadow .2s;
+  }
+  .led.danger{color:var(--red); text-shadow:0 0 6px rgba(255,68,68,.85), 0 0 22px rgba(255,68,68,.4); animation:flicker 1s infinite;}
+  @keyframes flicker{0%,100%{opacity:1;}50%{opacity:.82;}}
+  .led-unit{font-size:14px; opacity:.6; margin-left:4px;}
+  .gauge-sub{font-family:'JetBrains Mono'; font-size:11px; color:var(--text-faint); margin-top:8px; display:flex; justify-content:space-between;}
+
+  /* ---------- SPARKLINE ---------- */
+  .spark-panel{
+    background:var(--panel); border:1px solid var(--border); border-radius:10px;
+    padding:14px 18px; margin-bottom:16px;
+  }
+  .spark-panel .gauge-label{margin-bottom:6px;}
+  canvas#spark{width:100%; height:70px; display:block;}
+
+  /* ---------- LOG ---------- */
+  .log-panel{
+    background:var(--panel-2); border:1px solid var(--border); border-radius:10px;
+    margin-bottom:16px; overflow:hidden;
+  }
+  .log-head{
+    padding:12px 18px; border-bottom:1px solid var(--border);
+    font-family:'Oswald'; font-size:11px; letter-spacing:1.5px; text-transform:uppercase; color:var(--text-dim);
+    display:flex; justify-content:space-between; align-items:center;
+  }
+  .log-body{
+    height:220px; overflow-y:auto; padding:8px 0; font-family:'JetBrains Mono'; font-size:12px;
+  }
+  .log-body::-webkit-scrollbar{width:8px;}
+  .log-body::-webkit-scrollbar-thumb{background:#2A3138; border-radius:4px;}
+  .log-row{
+    padding:6px 18px; border-left:2px solid transparent; display:flex; gap:10px; color:var(--text-dim);
+  }
+  .log-row .ts{color:var(--text-faint); flex-shrink:0;}
+  .log-row.info{border-left-color:var(--text-faint);}
+  .log-row.warning{border-left-color:var(--amber); color:#D8C89A; background:rgba(255,176,32,0.04);}
+  .log-row.danger{border-left-color:var(--red); color:#F0B8B8; background:rgba(255,68,68,0.06);}
+  .log-row.mail{border-left-color:var(--green); color:#B8E8D2; background:rgba(62,207,142,0.05);}
+  .log-empty{padding:30px 18px; color:var(--text-faint); text-align:center; font-family:'Inter';}
+
+  /* ---------- CONTROLS ---------- */
+  .section{
+    background:var(--panel); border:1px solid var(--border); border-radius:10px;
+    padding:18px; margin-bottom:16px;
+  }
+  .section h2{
+    font-family:'Oswald'; font-size:12px; letter-spacing:1.5px; text-transform:uppercase;
+    color:var(--text-dim); margin:0 0 14px;
+  }
+  .btn-row{display:flex; gap:8px; flex-wrap:wrap;}
+  button{
+    font-family:'Inter'; font-weight:500; font-size:13px; cursor:pointer;
+    padding:9px 16px; border-radius:7px; border:1px solid var(--border);
+    background:#1D242B; color:var(--text); transition:.15s;
+  }
+  button:hover{border-color:#3A444D;}
+  button.active{background:var(--amber); color:#1A1300; border-color:var(--amber); font-weight:600;}
+  button.primary{background:var(--amber); color:#1A1300; border-color:var(--amber); font-weight:600;}
+  button.primary:hover{background:#FFC24E;}
+  button.stop{background:#2A1616; border-color:#4A2222; color:#F0B8B8;}
+  button:disabled{opacity:.4; cursor:not-allowed;}
+
+  .form-grid{display:grid; grid-template-columns:1fr 1fr; gap:12px; margin-bottom:14px;}
+  @media(max-width:600px){.form-grid{grid-template-columns:1fr;}}
+  label{display:block; font-size:11px; color:var(--text-dim); margin-bottom:5px; font-family:'JetBrains Mono';}
+  input{
+    width:100%; background:#0E1215; border:1px solid var(--border); border-radius:6px;
+    padding:9px 10px; color:var(--text); font-family:'JetBrains Mono'; font-size:12px;
+  }
+  input:focus{outline:none; border-color:var(--amber-dim);}
+  .hint{font-size:11.5px; color:var(--text-faint); line-height:1.6; margin-top:10px;}
+  .hint a{color:var(--amber);}
+  .status-pill{
+    display:inline-flex; align-items:center; gap:6px; font-size:11px; font-family:'JetBrains Mono';
+    padding:4px 10px; border-radius:20px; border:1px solid var(--border); color:var(--text-dim);
+  }
+  .status-pill.ok{color:var(--green); border-color:rgba(62,207,142,.3);}
+  .status-pill.warn{color:var(--amber); border-color:rgba(255,176,32,.3);}
+
+  footer{text-align:center; font-size:11.5px; color:var(--text-faint); margin-top:24px; line-height:1.7;}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <header>
+    <div class="brand">
+      <div class="brand-mark">V</div>
+      <div>
+        <h1>Vinç İzleme Sistemi</h1>
+        <p>CANBus tabanlı sensör ağı — simülasyon prototipi</p>
+      </div>
+    </div>
+    <div class="rec" id="recPill"><div class="rec-dot"></div><span id="recText">DURDU</span></div>
+  </header>
+
+  <div class="gauges">
+    <div class="gauge">
+      <div class="gauge-label">Ağırlık <span class="id">ID 182</span></div>
+      <div class="led" id="ledWeight">0<span class="led-unit">kg</span></div>
+      <div class="gauge-sub"><span id="capLabel">Kapasite: 5000 kg</span><span id="weightState">normal</span></div>
+    </div>
+    <div class="gauge">
+      <div class="gauge-label">Halat Açısı <span class="id">ID 181</span></div>
+      <div class="led" id="ledAngle" style="font-size:26px;">X:0° Y:0°</div>
+      <div class="gauge-sub"><span id="angleLimitLabel">Limit: ±8°</span><span id="angleState">normal</span></div>
+    </div>
+    <div class="gauge">
+      <div class="gauge-label">Halat Uzunluğu <span class="id">ID 183</span></div>
+      <div class="led" id="ledRope">0.00<span class="led-unit">m</span></div>
+      <div class="gauge-sub"><span>Güvenli bölge içinde</span><span id="ropeState">normal</span></div>
+    </div>
+  </div>
+
+  <div class="spark-panel">
+    <div class="gauge-label">Ağırlık Grafiği — Gerçek Zamanlı <span class="id">canlı</span></div>
+    <canvas id="spark"></canvas>
+  </div>
+
+  <div class="log-panel">
+    <div class="log-head">
+      <span>Olay Kaydı</span>
+      <span id="logCount" style="font-family:'JetBrains Mono'; color:var(--text-faint);">0 kayıt</span>
+    </div>
+    <div class="log-body" id="logBody">
+      <div class="log-empty">Simülasyonu başlatın, CAN hattındaki mesajlar burada listelenecek.</div>
+    </div>
+  </div>
+
+  <div class="section">
+    <h2>Senaryo Kontrolü</h2>
+    <div class="btn-row">
+      <button class="mode-btn active" data-mode="normal">Normal Çalışma</button>
+      <button class="mode-btn" data-mode="overload">Aşırı Yük Senaryosu</button>
+      <button class="mode-btn" data-mode="hanging">Gece Boyu Asılı Yük</button>
+      <button class="mode-btn" data-mode="random">Rastgele</button>
+    </div>
+    <div class="btn-row" style="margin-top:12px;">
+      <button class="primary" id="startBtn">▶ Simülasyonu Başlat</button>
+      <button class="stop" id="stopBtn" disabled>■ Durdur</button>
+    </div>
+  </div>
+
+  <div class="section">
+    <h2>Uyarı Eşikleri</h2>
+    <div class="form-grid">
+      <div>
+        <label>Maksimum ağırlık (kg)</label>
+        <input type="number" id="maxWeight" value="5000">
+      </div>
+      <div>
+        <label>Maksimum halat açısı (°)</label>
+        <input type="number" id="maxAngle" value="8">
+      </div>
+    </div>
+  </div>
+
+  <div class="section">
+    <h2>E-posta Uyarı Ayarları (EmailJS)</h2>
+    <div class="form-grid">
+      <div><label>Service ID</label><input type="text" id="svcId" placeholder="service_xxxxxxx"></div>
+      <div><label>Template ID</label><input type="text" id="tplId" placeholder="template_xxxxxxx"></div>
+      <div><label>Public Key</label><input type="text" id="pubKey" placeholder="XXXXXXXXXXXXXXXX"></div>
+      <div><label>Alıcı e-posta (patron)</label><input type="email" id="toEmail" placeholder="patron@sirket.com"></div>
+    </div>
+    <div class="btn-row">
+      <button id="testMailBtn">✉ Test Maili Gönder</button>
+      <span class="status-pill" id="mailStatus">yapılandırılmadı</span>
+    </div>
+    <p class="hint">
+      1) <a href="https://www.emailjs.com" target="_blank">emailjs.com</a>'a ücretsiz kaydolun → Gmail hesabınızı bağlayın (Email Services).<br>
+      2) Bir e-posta şablonu (Template) oluşturun; içinde <code>{{subject}}</code>, <code>{{message}}</code>, <code>{{time}}</code>, <code>{{to_email}}</code> değişkenlerini kullanın.<br>
+      3) Service ID, Template ID ve Public Key'i (Account → API Keys) yukarı yapıştırın. Hiçbir sunucu kurmanıza gerek yok — mail doğrudan tarayıcıdan, sizin Gmail'inizden gönderilir.
+    </p>
+  </div>
+
+  <footer>
+    Bu sayfa gerçek bir vinç veya CAN donanımı gerektirmez — tüm sensör değerleri yazılımla üretilir (simüle edilir).<br>
+    Amaç: eşik aşımı → olay kaydı → e-posta bildirimi zincirinin uçtan uca çalıştığını göstermek.
+  </footer>
+</div>
+
+<script>
+// ---------- STATE ----------
+const state = {
+  running:false, mode:'normal', tick:0,
+  weight:900, angleX:0, angleY:0, rope:2.0,
+  hangingHours:0,
+  fired:{overload:false, angle:false, hanging:false},
+  history:[]
+};
+const els = {
+  ledWeight: document.getElementById('ledWeight'),
+  ledAngle: document.getElementById('ledAngle'),
+  ledRope: document.getElementById('ledRope'),
+  weightState: document.getElementById('weightState'),
+  angleState: document.getElementById('angleState'),
+  ropeState: document.getElementById('ropeState'),
+  capLabel: document.getElementById('capLabel'),
+  angleLimitLabel: document.getElementById('angleLimitLabel'),
+  logBody: document.getElementById('logBody'),
+  logCount: document.getElementById('logCount'),
+  recPill: document.getElementById('recPill'),
+  recText: document.getElementById('recText'),
+  mailStatus: document.getElementById('mailStatus'),
+};
+let logN = 0;
+let emailjsReady = false;
+try{ if(window.emailjs){ emailjsReady = true; } }catch(e){}
+
+// ---------- LOGGING ----------
+function ts(){
+  const d = new Date();
+  return d.toLocaleTimeString('tr-TR', {hour:'2-digit', minute:'2-digit', second:'2-digit'});
+}
+function log(kind, text){
+  if(els.logBody.querySelector('.log-empty')) els.logBody.innerHTML = '';
+  const row = document.createElement('div');
+  row.className = 'log-row ' + kind;
+  row.innerHTML = `<span class="ts">${ts()}</span><span>${text}</span>`;
+  els.logBody.prepend(row);
+  logN++;
+  els.logCount.textContent = logN + ' kayıt';
+  while(els.logBody.children.length > 120) els.logBody.removeChild(els.logBody.lastChild);
+}
+
+// ---------- MODE BUTTONS ----------
+document.querySelectorAll('.mode-btn').forEach(btn=>{
+  btn.addEventListener('click', ()=>{
+    document.querySelectorAll('.mode-btn').forEach(b=>b.classList.remove('active'));
+    btn.classList.add('active');
+    state.mode = btn.dataset.mode;
+    state.fired = {overload:false, angle:false, hanging:false};
+    state.hangingHours = 0;
+    log('info', `Senaryo değiştirildi → <b>${btn.textContent}</b>`);
+  });
+});
+
+// ---------- SIMULATION TICK ----------
+function simulateValues(){
+  const maxW = parseFloat(document.getElementById('maxWeight').value) || 5000;
+  switch(state.mode){
+    case 'normal':
+      state.weight = 900 + Math.sin(state.tick/6)*250 + (Math.random()*80-40);
+      state.angleX = Math.sin(state.tick/4)*2 + (Math.random()*1-0.5);
+      state.angleY = Math.cos(state.tick/5)*1.5 + (Math.random()*1-0.5);
+      state.rope = 2 + Math.sin(state.tick/10)*1.2;
+      break;
+    case 'overload':
+      state.weight = Math.min(maxW*1.35, 1200 + state.tick*180);
+      state.angleX = Math.sin(state.tick/4)*3;
+      state.angleY = Math.cos(state.tick/5)*2;
+      state.rope = 3 + Math.sin(state.tick/8);
+      break;
+    case 'hanging':
+      state.weight = 1400 + Math.sin(state.tick/9)*40;
+      state.angleX = Math.random()*0.6;
+      state.angleY = Math.random()*0.6;
+      state.rope = 5.2;
+      state.hangingHours += 0.5; // simüle edilen saat (hızlandırılmış zaman)
+      break;
+    case 'random': {
+      const r = Math.random();
+      if(r < 0.15){ state.weight = maxW*1.2 + Math.random()*400; }
+      else{ state.weight = 700 + Math.random()*900; }
+      state.angleX = (Math.random()*14 - 7);
+      state.angleY = (Math.random()*10 - 5);
+      state.rope = 1.5 + Math.random()*4;
+      break;
+    }
+  }
+  if(state.mode !== 'hanging') state.hangingHours = 0;
+  state.weight = Math.max(0, state.weight);
+}
+
+function updateDisplays(){
+  const maxW = parseFloat(document.getElementById('maxWeight').value) || 5000;
+  const maxA = parseFloat(document.getElementById('maxAngle').value) || 8;
+  els.capLabel.textContent = `Kapasite: ${maxW} kg`;
+  els.angleLimitLabel.textContent = `Limit: ±${maxA}°`;
+
+  const wOver = state.weight > maxW;
+  els.ledWeight.innerHTML = Math.round(state.weight) + '<span class="led-unit">kg</span>';
+  els.ledWeight.classList.toggle('danger', wOver);
+  els.weightState.textContent = wOver ? 'AŞIM' : 'normal';
+  els.weightState.style.color = wOver ? 'var(--red)' : 'var(--text-faint)';
+
+  const aOver = Math.abs(state.angleX) > maxA || Math.abs(state.angleY) > maxA;
+  els.ledAngle.textContent = `X:${state.angleX.toFixed(1)}° Y:${state.angleY.toFixed(1)}°`;
+  els.ledAngle.classList.toggle('danger', aOver);
+  els.angleState.textContent = aOver ? 'AŞIM' : 'normal';
+  els.angleState.style.color = aOver ? 'var(--red)' : 'var(--text-faint)';
+
+  els.ledRope.innerHTML = state.rope.toFixed(2) + '<span class="led-unit">m</span>';
+  const hangOver = state.hangingHours >= 8;
+  els.ledRope.classList.toggle('danger', hangOver);
+  els.ropeState.textContent = hangOver ? 'ASILI (' + state.hangingHours.toFixed(1) + ' sa)' : 'normal';
+  els.ropeState.style.color = hangOver ? 'var(--red)' : 'var(--text-faint)';
+
+  state.history.push(state.weight);
+  if(state.history.length > 60) state.history.shift();
+  drawSpark();
+}
+
+function drawSpark(){
+  const c = document.getElementById('spark');
+  const dpr = window.devicePixelRatio || 1;
+  const w = c.clientWidth, h = c.clientHeight;
+  c.width = w*dpr; c.height = h*dpr;
+  const ctx = c.getContext('2d');
+  ctx.scale(dpr,dpr);
+  ctx.clearRect(0,0,w,h);
+  if(state.history.length < 2) return;
+  const maxV = Math.max(...state.history, 100) * 1.15;
+  ctx.beginPath();
+  state.history.forEach((v,i)=>{
+    const x = (i/(state.history.length-1)) * w;
+    const y = h - (v/maxV)*h;
+    if(i===0) ctx.moveTo(x,y); else ctx.lineTo(x,y);
+  });
+  ctx.strokeStyle = '#FFB020';
+  ctx.lineWidth = 2;
+  ctx.shadowColor = 'rgba(255,176,32,0.6)';
+  ctx.shadowBlur = 8;
+  ctx.stroke();
+}
+
+function checkThresholds(){
+  const maxW = parseFloat(document.getElementById('maxWeight').value) || 5000;
+  const maxA = parseFloat(document.getElementById('maxAngle').value) || 8;
+
+  // CAN mesaj kaydı (Çizelge 2/3 formatına benzer)
+  if(state.tick % 4 === 0){
+    log('info', `ID:182 Aşırı Yük Kontrol → Ağırlık: ${Math.round(state.weight)} kg`);
+  }
+
+  const wOver = state.weight > maxW;
+  if(wOver && !state.fired.overload){
+    log('danger', `⚠ ID:182 AŞIRI YÜK — ${Math.round(state.weight)} kg &gt; limit ${maxW} kg`);
+    sendAlert('AŞIRI YÜK UYARISI', `Vinç kapasitesi aşıldı. Ölçülen ağırlık: ${Math.round(state.weight)} kg (limit: ${maxW} kg).`);
+    state.fired.overload = true;
+  }
+  if(!wOver) state.fired.overload = false;
+
+  const aOver = Math.abs(state.angleX) > maxA || Math.abs(state.angleY) > maxA;
+  if(aOver && !state.fired.angle){
+    log('danger', `⚠ ID:181 HALAT AÇISI LİMİT AŞIMI — X:${state.angleX.toFixed(1)}° Y:${state.angleY.toFixed(1)}°`);
+    sendAlert('HALAT AÇISI LİMİT AŞIMI', `Halat açısı güvenli sınırın dışına çıktı. X:${state.angleX.toFixed(1)}° Y:${state.angleY.toFixed(1)}° (limit: ±${maxA}°).`);
+    state.fired.angle = true;
+  }
+  if(!aOver) state.fired.angle = false;
+
+  if(state.hangingHours >= 8 && !state.fired.hanging){
+    log('danger', `⚠ ID:183 YÜK ${state.hangingHours.toFixed(1)} SAATTİR ASKIDA BIRAKILDI`);
+    sendAlert('YÜK GECE BOYU ASKIDA BIRAKILDI', `Vinç üzerindeki yük ${state.hangingHours.toFixed(1)} saattir askıda. Mesai sonunda yükün indirilmesi önerilir.`);
+    state.fired.hanging = true;
+  }
+}
+
+function sendAlert(subject, message){
+  const svc = document.getElementById('svcId').value.trim();
+  const tpl = document.getElementById('tplId').value.trim();
+  const key = document.getElementById('pubKey').value.trim();
+  const to = document.getElementById('toEmail').value.trim();
+
+  if(!svc || !tpl || !key || !to){
+    log('warning', `✉ E-posta gönderilmedi — EmailJS bilgileri eksik (simülasyon devam ediyor)`);
+    return;
+  }
+  if(!emailjsReady){
+    log('warning', `✉ E-posta kütüphanesi yüklenemedi (internet bağlantısını kontrol edin)`);
+    return;
+  }
+  log('mail', `✉ Mail gönderiliyor → ${to}`);
+  emailjs.init(key);
+  emailjs.send(svc, tpl, {
+    subject: subject,
+    message: message,
+    time: new Date().toLocaleString('tr-TR'),
+    to_email: to
+  }).then(()=>{
+    log('mail', `✓ Mail başarıyla gönderildi (${subject})`);
+  }).catch(err=>{
+    log('warning', `✉ Mail gönderilemedi: ${err && err.text ? err.text : 'bilinmeyen hata'}`);
+  });
+}
+
+// ---------- START/STOP ----------
+let timer = null;
+document.getElementById('startBtn').addEventListener('click', ()=>{
+  state.running = true;
+  document.getElementById('startBtn').disabled = true;
+  document.getElementById('stopBtn').disabled = false;
+  els.recPill.classList.add('live');
+  els.recText.textContent = 'ÇALIŞIYOR';
+  log('info', 'Simülasyon başlatıldı — CAN hattı dinleniyor (500 ms/mesaj)');
+  timer = setInterval(()=>{
+    state.tick++;
+    simulateValues();
+    updateDisplays();
+    checkThresholds();
+  }, 500);
+});
+document.getElementById('stopBtn').addEventListener('click', ()=>{
+  state.running = false;
+  clearInterval(timer);
+  document.getElementById('startBtn').disabled = false;
+  document.getElementById('stopBtn').disabled = true;
+  els.recPill.classList.remove('live');
+  els.recText.textContent = 'DURDU';
+  log('info', 'Simülasyon durduruldu');
+});
+
+document.getElementById('testMailBtn').addEventListener('click', ()=>{
+  sendAlert('TEST UYARISI', 'Bu, vinç izleme sisteminden gönderilen bir test mesajıdır.');
+});
+
+// mail config status
+function refreshMailStatus(){
+  const filled = ['svcId','tplId','pubKey','toEmail'].every(id => document.getElementById(id).value.trim());
+  els.mailStatus.textContent = filled ? 'yapılandırıldı ✓' : 'yapılandırılmadı';
+  els.mailStatus.classList.toggle('ok', filled);
+  els.mailStatus.classList.toggle('warn', !filled);
+}
+['svcId','tplId','pubKey','toEmail'].forEach(id=>{
+  document.getElementById(id).addEventListener('input', refreshMailStatus);
+});
+refreshMailStatus();
+updateDisplays();
+</script>
+</body>
+</html>

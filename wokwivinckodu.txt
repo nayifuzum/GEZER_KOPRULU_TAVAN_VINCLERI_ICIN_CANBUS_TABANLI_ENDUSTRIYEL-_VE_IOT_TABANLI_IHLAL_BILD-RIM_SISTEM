@@ -1,0 +1,270 @@
+#include <WiFi.h>
+#include <HTTPClient.h> 
+#include <ESP32-TWAI-CAN.hpp>
+#include <Wire.h>
+#include <LiquidCrystal_I2C.h>
+
+// --- I2C Ekran (Harici Gösterge) Pinleri ---
+#define I2C_SDA 32
+#define I2C_SCL 33
+LiquidCrystal_I2C lcd(0x27, 16, 2);
+
+// --- Wi-Fi Ayarları (Wokwi Sanal Ağı) ---
+const char* ssid = "Wokwi-GUEST";
+const char* password = "";
+
+// --- EMAILJS AYARLARI (REST API) ---
+const char* emailjs_server = "https://api.emailjs.com/api/v1.0/email/send";
+const String service_id = "service_ypj59z8";    // EmailJS'den alınacak
+const String template_id = "template_3kbygzm";  // EmailJS'den alınacak
+const String public_key = "6s9dzjeot4mYHLO_Y";    // EmailJS'den alınacak
+bool epostaGonderildi = false; // Spam engelleme kilidi
+
+// --- CAN pinleri ---
+#define CAN_TX 21
+#define CAN_RX 22
+
+// --- Sensör Pinleri ---
+#define PIN_YUK 34   
+#define PIN_TUR 35   
+#define PIN_ACI 36   
+
+// --- CAN mesaj ID'leri (Çizelge 2) ---
+#define ID_ACI_SENSORU 181
+#define ID_ASIRI_YUK   182
+#define ID_TUR_SAYICI  183
+
+// --- Eşik değerleri ---
+const int   MAX_AGIRLIK_KG = 4000;
+const float MAX_ACI_DERECE = 8.0;
+const int   MAX_HALAT_CM   = 1800;
+
+CanFrame rxFrame;
+
+// --- TDM (Durum Makinesi) Değişkenleri ---
+unsigned long oncekiZaman = 0;
+const unsigned long TDM_PERIYOT = 165;
+int tdmSirasi = 0;
+
+// --- ASILI YÜK (EYLEMSİZLİK) DEĞİŞKENLERİ ---
+int lastRawYuk = 0;
+int lastRawTur = 0;
+int lastRawAci = 0;
+unsigned long sonHareketZamani = 0;
+const unsigned long ASKI_SURESI_LIMIT = 10000; 
+bool g_hataAsiliYuk = false;
+
+// --- Global Durum Değişkenleri ---
+int g_agirlik = 0, g_mesafe = 0, g_aci = 0;
+bool g_hataYuk = false, g_hataAci = false, g_hataMesafe = false;
+bool canHazir = false;
+
+// --- YARDIMCI FONKSİYONLAR ---
+void printLcdPadded(int row, String text) {
+  while(text.length() < 16) text += " ";
+  lcd.setCursor(0, row);
+  lcd.print(text);
+}
+
+void sendCanFrame(uint32_t id, uint8_t d0, uint8_t d1) {
+  if (!canHazir) return; 
+  CanFrame frame = {0};
+  frame.identifier = id;
+  frame.extd = 0;
+  frame.data_length_code = 8;
+  frame.self = 1;
+  frame.data[0] = d0;
+  frame.data[1] = d1;
+  ESP32Can.writeFrame(frame);
+}
+
+#include <WiFiClientSecure.h> // En başa diğer kütüphanelerin yanına ekle
+
+// ... diğer kodlar aynı kalsın ...
+
+void sendEmailAlert(String hataSebebi) {
+  if (WiFi.status() == WL_CONNECTED) {
+    // 1. Güvenli bağlantı istemcisi oluştur
+    WiFiClientSecure client;
+    client.setInsecure(); // !!! SERTİFİKA DOĞRULAMASINI KAPAT (403 ve -1 hatasını çözer)
+
+    HTTPClient http;
+    
+    // 2. İstemciyi kullanarak başlat
+    if (http.begin(client, emailjs_server)) { 
+      http.addHeader("Content-Type", "application/json");
+
+      String payload = "{\"service_id\":\"" + service_id + "\",\"template_id\":\"" + template_id + "\",\"user_id\":\"" + public_key + "\",\"template_params\":{\"message\":\"" + hataSebebi + "\"}}";
+      
+      Serial.println("Sunucuya istek gonderiliyor...");
+      int httpResponseCode = http.POST(payload);
+      
+      if (httpResponseCode > 0) {
+        Serial.printf("=> HTTP Kod: %d\n", httpResponseCode);
+        if (httpResponseCode == 200) {
+           Serial.println("=> E-Posta Basariyla Yoneticiye Iletildi!");
+        }
+      } else {
+        Serial.printf("=> E-Posta Hatasi (Baglanti Kurulamadi): %s\n", http.errorToString(httpResponseCode).c_str());
+      }
+      http.end();
+    } else {
+      Serial.println("=> HTTP baglantisi baslatilamadi!");
+    }
+  } else {
+    Serial.println("Hata: WiFi bagli degil!");
+  }
+}
+
+void setup() {
+  Serial.begin(115200);
+
+  pinMode(PIN_YUK, INPUT);
+  pinMode(PIN_TUR, INPUT);
+  pinMode(PIN_ACI, INPUT);
+
+  Wire.begin(I2C_SDA, I2C_SCL);
+  lcd.init();
+  lcd.backlight();
+  
+  // --- Wi-Fi BAĞLANTISI ---
+  printLcdPadded(0, "WiFi Baglaniyor.");
+  printLcdPadded(1, "Lutfen Bekleyin.");
+  WiFi.begin(ssid, password, 6); 
+  while (WiFi.status() != WL_CONNECTED) {
+    delay(250);
+  }
+  
+  printLcdPadded(0, "WiFi: BASARILI!");
+  printLcdPadded(1, "Sistem Hazir...");
+  delay(1500); 
+
+  // --- CAN BAŞLATMA ---
+  twai_general_config_t g_config = TWAI_GENERAL_CONFIG_DEFAULT((gpio_num_t)CAN_TX, (gpio_num_t)CAN_RX, TWAI_MODE_NO_ACK);
+  g_config.tx_queue_len = 20;
+  g_config.rx_queue_len = 20;
+  canHazir = ESP32Can.begin(ESP32Can.convertSpeed(500), CAN_TX, CAN_RX, 10, 10, nullptr, &g_config, nullptr);
+  lcd.clear();
+}
+
+void loop() {
+  if (canHazir) {
+    while (ESP32Can.readFrame(rxFrame, 0)) {} 
+  }
+
+  unsigned long simdikiZaman = millis();
+
+  if (simdikiZaman - oncekiZaman >= TDM_PERIYOT) {
+    oncekiZaman = simdikiZaman;
+
+    switch (tdmSirasi) {
+
+      case 0: { 
+        int rawYuk = analogRead(PIN_YUK);
+        if (abs(rawYuk - lastRawYuk) > 30) {
+          sonHareketZamani = millis();
+          lastRawYuk = rawYuk;
+          g_hataAsiliYuk = false; 
+        }
+        int geciciAgirlik = (int)((rawYuk / 4095.0) * 6000.0);
+        g_agirlik = (geciciAgirlik < 10) ? 0 : geciciAgirlik; 
+        g_hataYuk = g_agirlik > MAX_AGIRLIK_KG;
+
+        sendCanFrame(ID_ASIRI_YUK, (g_agirlik >> 8) & 0xFF, g_agirlik & 0xFF);
+        tdmSirasi = 1;
+        break;
+      }
+
+      case 1: { 
+        int rawTur = analogRead(PIN_TUR);
+        if (abs(rawTur - lastRawTur) > 30) {
+          sonHareketZamani = millis();
+          lastRawTur = rawTur;
+          g_hataAsiliYuk = false; 
+        }
+        g_mesafe = (int)((rawTur / 4095.0) * 2000.0);
+        g_hataMesafe = g_mesafe > MAX_HALAT_CM;
+
+        sendCanFrame(ID_TUR_SAYICI, (g_mesafe >> 8) & 0xFF, g_mesafe & 0xFF);
+        tdmSirasi = 2;
+        break;
+      }
+
+      case 2: { 
+        int rawAci = analogRead(PIN_ACI);
+        if (abs(rawAci - lastRawAci) > 30) {
+          sonHareketZamani = millis();
+          lastRawAci = rawAci;
+          g_hataAsiliYuk = false; 
+        }
+        float aciDereceF = ((rawAci / 4095.0) * 20.0) - 10.0;
+        g_aci = (int)aciDereceF;
+        g_hataAci = abs(aciDereceF) > MAX_ACI_DERECE;
+
+        sendCanFrame(ID_ACI_SENSORU, (uint8_t)(aciDereceF + 100), 0);
+
+        // --- EYLEMSİZLİK KONTROLÜ ---
+        if (g_agirlik > 10) { 
+          if (millis() - sonHareketZamani >= ASKI_SURESI_LIMIT) {
+            g_hataAsiliYuk = true;
+          }
+        } else {
+          sonHareketZamani = millis();
+          g_hataAsiliYuk = false;
+        }
+
+        // --- AKILLI LCD VE E-POSTA TETİKLEYİCİSİ ---
+        bool suAnHataVar = g_hataAsiliYuk || g_hataYuk || g_hataAci || g_hataMesafe;
+
+        if (suAnHataVar) {
+          String epostaMetni = "Sistem Ihlali Tespit Edildi: ";
+          
+          if (g_hataAsiliYuk) {
+            printLcdPadded(0, "UYARI: YUK ASILI");
+            printLcdPadded(1, "   BIRAKILDI!   ");
+            epostaMetni += "Operator mesai sonrasi yuku kancada asili birakti!";
+          } 
+          else {
+            String lcdMsg = "HATA: ";
+            if (g_hataYuk) { lcdMsg += "YUK "; epostaMetni += "Kapasite Asimi (Asiri Yuk)! "; }
+            if (g_hataAci) { lcdMsg += "ACI "; epostaMetni += "Tehlikeli Halat Acisi! "; }
+            if (g_hataMesafe){ lcdMsg += "TUR"; epostaMetni += "Maksimum Halat Uzunlugu Asildi! "; }
+            
+            if(g_hataYuk + g_hataAci + g_hataMesafe == 1) { // Tek hata varsa spesifik yaz
+               if (g_hataYuk) printLcdPadded(0, "UYARI: AGIR YUK");
+               if (g_hataAci) printLcdPadded(0, "UYARI: TERS ACI");
+               if (g_hataMesafe) printLcdPadded(0, "UYARI: HATALI TUR");
+            } else {
+               printLcdPadded(0, lcdMsg); // Çoklu hata varsa
+            }
+            printLcdPadded(1, ""); 
+          }
+
+          // Kilit açıksa 1 kez E-posta Gönder
+          if (!epostaGonderildi) {
+            Serial.println("\n!!! UYARI DURUMU !!! -> " + epostaMetni);
+            sendEmailAlert(epostaMetni);
+            epostaGonderildi = true; // Gönderildi, kilidi kapat.
+          }
+          
+        } 
+        else {
+          char buf[17];
+          sprintf(buf, "Y:%-4d T:%-4dcm", g_agirlik, g_mesafe);
+          printLcdPadded(0, String(buf));
+          sprintf(buf, "A:%-4d DURUM:OK", g_aci);
+          printLcdPadded(1, String(buf));
+
+          // Her şey normale döndüyse e-posta kilidini aç (Sıfırla)
+          if(epostaGonderildi) {
+             Serial.println("\nSistem normale dondu. Uyari kilidi acildi.");
+             epostaGonderildi = false; 
+          }
+        }
+
+        tdmSirasi = 0;
+        break;
+      }
+    }
+  }
+}
