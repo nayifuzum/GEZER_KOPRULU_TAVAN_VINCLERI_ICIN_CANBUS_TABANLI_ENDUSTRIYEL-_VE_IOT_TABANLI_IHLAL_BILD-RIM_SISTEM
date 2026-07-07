@@ -14,7 +14,7 @@ const char* ssid = "Wokwi-GUEST";
 const char* password = "";
 
 // --- EMAILJS AYARLARI (REST API) ---
-const char* emailjs_server = "https://api.emailjs.com/api/v1.0/email/send";
+const char* emailjs_server = "";
 const String service_id = "";    // EmailJS'den alınacak
 const String template_id = "";  // EmailJS'den alınacak
 const String public_key = "";    // EmailJS'den alınacak
